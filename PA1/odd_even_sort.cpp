@@ -1,5 +1,6 @@
 //考虑n/nprocs不为整数
 //先判断是否逆序，再传data
+//非阻塞通信另一种写法
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -17,38 +18,48 @@ void Worker::sort() {
     size_t last_size = n - block_size * (nprocs - 1);
     float recv_float;
     float *recv_buffer = new float[block_size];
+    MPI_Request request_send_0, request_send_1, request_recv_0, request_recv_1;
     void merge(float* my_data, float* recv_data, int my_len, int recv_len, int mode);
     int getPartner(int i_case, int rank);
-      
+    int getNextPartner(int i_case, int rank);
+    
     //进程内排序
     std::sort(data, data + block_len);
 
     //至多nprocs次奇偶排序即可保证有序
-    for (int i = 0; i < nprocs; i++){
-        int partner = getPartner(i, rank);
+    int i, partner;
+    
+    for (i = 0; i < nprocs; i++){
+        partner = getPartner(i, rank);
+
         if(partner >= 0 && partner < nprocs){
-            if(partner < rank){
-                MPI_Send(&data[0], 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD);
-                MPI_Recv(&recv_float, 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                if(recv_float > data[0]){
-                    MPI_Send(data, block_len, MPI_FLOAT, partner, 0, MPI_COMM_WORLD);
-                    MPI_Recv(recv_buffer, block_size, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    int recv_len = (partner == nprocs - 1)? last_size: block_size;
-                    merge(data, recv_buffer, block_len, recv_len, rank - partner);
-                }
+            float send_float = (partner < rank)? data[0]: data[block_len - 1];
+            MPI_Irecv(&recv_float, 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, &request_recv_0);
+            MPI_Isend(&send_float, 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, &request_send_0);
+            
+            MPI_Wait(&request_recv_0, MPI_STATUS_IGNORE);
+            if((partner < rank && recv_float > data[0]) || (partner > rank && recv_float < data[block_len - 1])){
+                MPI_Irecv(recv_buffer, block_size, MPI_FLOAT, partner, 1, MPI_COMM_WORLD, &request_recv_1);
+                MPI_Isend(data, block_len, MPI_FLOAT, partner, 1, MPI_COMM_WORLD, &request_send_1);
+                int recv_len = (partner == nprocs - 1)? last_size: block_size;
+                MPI_Wait(&request_recv_1, MPI_STATUS_IGNORE);
+                /*
+                if(nextpartner >= 0 && nextpartner < nprocs){
+                    MPI_Irecv(&recv_float, 1, MPI_FLOAT, nextpartner, 0, MPI_COMM_WORLD, &request_recv_0);
+                }*/
+                merge(data, recv_buffer, block_len, recv_len, rank - partner);
+                MPI_Wait(&request_send_1, MPI_STATUS_IGNORE);
             }
+            /*
             else{
-                MPI_Send(&data[block_len - 1], 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD);
-                MPI_Recv(&recv_float, 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                if(recv_float < data[block_len - 1]){
-                    MPI_Send(data, block_len, MPI_FLOAT, partner, 0, MPI_COMM_WORLD);
-                    MPI_Recv(recv_buffer, block_size, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    int recv_len = (partner == nprocs - 1)? last_size: block_size;
-                    merge(data, recv_buffer, block_len, recv_len, rank - partner);
+                if(nextpartner >= 0 && nextpartner < nprocs){
+                    MPI_Irecv(&recv_float, 1, MPI_FLOAT, nextpartner, 0, MPI_COMM_WORLD, &request_recv_0);
                 }
-            }
+            }*/
+            MPI_Wait(&request_send_0, MPI_STATUS_IGNORE);
         }
     } 
+
     delete []recv_buffer;
 }
 
@@ -64,6 +75,21 @@ int getPartner(int i_case, int rank){
             return rank - 1;
         else
             return rank + 1;
+    }
+}
+
+int getNextPartner(int i_case, int rank){
+    if(i_case & 1){
+        if(rank & 1)
+            return rank - 1;
+        else
+            return rank + 1;
+    }
+    else{
+        if(rank & 1)
+            return rank + 1;
+        else
+            return rank - 1;
     }
 }
 
