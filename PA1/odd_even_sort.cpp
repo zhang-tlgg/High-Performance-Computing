@@ -1,6 +1,7 @@
 //考虑n/nprocs不为整数
 //先判断是否逆序，再传data
-//非阻塞通信另一种写法
+//非阻塞
+//把request_recv_0提到前面
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -27,39 +28,51 @@ void Worker::sort() {
     std::sort(data, data + block_len);
 
     //至多nprocs次奇偶排序即可保证有序
-    int i, partner;
+    int i, partner, nextpartner;
+
+    i = 1;
+    nextpartner = getNextPartner(i, rank);
+    if(nextpartner >= 0 && nextpartner < nprocs){
+        MPI_Irecv(&recv_float, 1, MPI_FLOAT, nextpartner, 0, MPI_COMM_WORLD, &request_recv_0);
+    }
     
     for (i = 0; i < nprocs; i++){
         partner = getPartner(i, rank);
+        nextpartner = getNextPartner(i, rank);
 
         if(partner >= 0 && partner < nprocs){
             float send_float = (partner < rank)? data[0]: data[block_len - 1];
-            MPI_Irecv(&recv_float, 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, &request_recv_0);
             MPI_Isend(&send_float, 1, MPI_FLOAT, partner, 0, MPI_COMM_WORLD, &request_send_0);
-            
             MPI_Wait(&request_recv_0, MPI_STATUS_IGNORE);
+
             if((partner < rank && recv_float > data[0]) || (partner > rank && recv_float < data[block_len - 1])){
                 MPI_Irecv(recv_buffer, block_size, MPI_FLOAT, partner, 1, MPI_COMM_WORLD, &request_recv_1);
                 MPI_Isend(data, block_len, MPI_FLOAT, partner, 1, MPI_COMM_WORLD, &request_send_1);
                 int recv_len = (partner == nprocs - 1)? last_size: block_size;
-                MPI_Wait(&request_recv_1, MPI_STATUS_IGNORE);
-                /*
                 if(nextpartner >= 0 && nextpartner < nprocs){
                     MPI_Irecv(&recv_float, 1, MPI_FLOAT, nextpartner, 0, MPI_COMM_WORLD, &request_recv_0);
-                }*/
+                }
+                MPI_Wait(&request_recv_1, MPI_STATUS_IGNORE);
+                
                 merge(data, recv_buffer, block_len, recv_len, rank - partner);
                 MPI_Wait(&request_send_1, MPI_STATUS_IGNORE);
             }
-            /*
             else{
                 if(nextpartner >= 0 && nextpartner < nprocs){
                     MPI_Irecv(&recv_float, 1, MPI_FLOAT, nextpartner, 0, MPI_COMM_WORLD, &request_recv_0);
                 }
-            }*/
+            }
             MPI_Wait(&request_send_0, MPI_STATUS_IGNORE);
+        }
+        else if(nextpartner >= 0 && nextpartner < nprocs){
+            MPI_Irecv(&recv_float, 1, MPI_FLOAT, nextpartner, 0, MPI_COMM_WORLD, &request_recv_0);
         }
     } 
 
+    if(nextpartner >= 0 && nextpartner < nprocs){
+        MPI_Cancel(&request_recv_0);
+        MPI_Request_free(&request_recv_0);
+    }
     delete []recv_buffer;
 }
 
